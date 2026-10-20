@@ -1,0 +1,103 @@
+name: agentforge-verify
+
+# Reusable workflow: run one AgentForge tool against the CALLER
+# repository and upload its JSON (+ optional SARIF) reports as
+# artifacts. The job fails with the tool's own exit code, so a FAIL
+# verdict is a red build — but the reports are uploaded first
+# (if: always()), so the evidence survives the failure.
+#
+# Usage from a caller repo:
+#
+#   jobs:
+#     verify:
+#       uses: maticcretic-commits/.github/.github/workflows/agentforge-verify.yml@main
+#       with:
+#         tool: secretscan
+#         args: scan src --format json
+#         sarif-args: scan src --format sarif   # finding-type tools only
+#
+# The `args` string is everything after the tool's command name,
+# including its format flag (most tools: --format json; promptre and
+# agentci: --json). Severity gating lives inside the tools — each
+# tool's exit 1 already means "findings at or above its fail
+# threshold" (e.g. secretscan --fail-on). The fail-on-severity input
+# records the caller's gate policy alongside the run; the
+# thresholds themselves are the tools' own flags in `args`.
+
+on:
+  workflow_call:
+    inputs:
+      tool:
+        description: "AgentForge tool (repo) name, e.g. secretscan"
+        required: true
+        type: string
+      args:
+        description: "Full argument string for the JSON run, after the tool name"
+        required: true
+        type: string
+      sarif-args:
+        description: "Optional argument string for a SARIF run (finding-type tools only)"
+        required: false
+        type: string
+        default: ""
+      fail-on-severity:
+        description: "Gate policy label recorded with the run (thresholds are the tool's own flags in args)"
+        required: false
+        type: string
+        default: "HIGH"
+      python-version:
+        description: "Python version to install the tool with"
+        required: false
+        type: string
+        default: "3.12"
+
+jobs:
+  verify:
+    name: ${{ inputs.tool }} verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the caller repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install ${{ inputs.tool }} from its git URL
+        run: python -m pip install "git+https://github.com/maticcretic-commits/${{ inputs.tool }}.git"
+
+      - name: Run ${{ inputs.tool }} (JSON report)
+        id: run-json
+        shell: bash
+        run: |
+          set +e
+          "${{ inputs.tool }}" ${{ inputs.args }} > agentforge-report.json
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Run ${{ inputs.tool }} (SARIF report)
+        id: run-sarif
+        if: ${{ inputs.sarif-args != '' }}
+        shell: bash
+        run: |
+          set +e
+          "${{ inputs.tool }}" ${{ inputs.sarif-args }} > agentforge-report.sarif
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Upload AgentForge reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentforge-${{ inputs.tool }}-reports
+          path: |
+            agentforge-report.json
+            agentforge-report.sarif
+          if-no-files-found: ignore
+
+      - name: Enforce the verdict
+        shell: bash
+        run: |
+          code="${{ steps.run-json.outputs.exit_code }}"
+          echo "${{ inputs.tool }} exited ${code} (0 clean · 1 findings/FAIL · 2 caller error · 3 environment)"
+          echo "Gate policy (fail-on severity): ${{ inputs.fail-on-severity }}"
+          exit "${code:-2}"
