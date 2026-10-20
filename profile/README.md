@@ -40,6 +40,18 @@ pip install git+https://github.com/maticcretic-commits/secretscan
 …or clone and run the single file: `python src/secretscan.py …`.
 Requires Python 3.9+. A PyPI release is planned.
 
+## Usage
+
+Pick the tool for the question you need answered, run it on the
+artifact, read the exit code (0 clean · 1 findings · 2 your input
+was wrong). The tools chain in pipelines — JSON in, JSON out:
+
+```bash
+cat trace.jsonl | tracetape validate - --format json
+cat agent-output.md | secretscan scan - --format sarif
+cat new-prompt.md | promptdiff diff old.md - --fail-on-risk
+```
+
 ## The family conventions
 
 All twelve tools share one contract (the full text is
